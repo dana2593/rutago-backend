@@ -1,0 +1,186 @@
+name: Deploy to Container App
+
+on:
+  push:
+    branches:
+      - main
+      - qa
+      - develop
+      - "feature/**"
+      - "bugfix/**"
+      - "hotfix/**"
+    paths:
+      - "rutago-backend/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+env:
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+  IMAGE_REPO: rutago-backend
+  CONTAINERAPP_NAME: ${{ vars.CONTAINERAPP_NAME }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./rutago-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install ruff
+          pip install -r requirements.txt
+
+      - name: Run ruff
+        run: ruff check app/
+
+  auth:
+    name: Authenticate to ACR
+    runs-on: ubuntu-latest
+    needs: lint
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'noprod' }}
+    steps:
+      - name: Azure Login (Service Principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set subscription explicitly
+        run: az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Show SP identity
+        run: az account show --query user -o json
+
+      - name: Verify ACR and login
+        run: |
+          echo "Using ACR_NAME=${{ env.ACR_NAME }}"
+          az acr show -n "${{ env.ACR_NAME }}" -o table
+          az acr login -n "${{ env.ACR_NAME }}"
+          echo "Authenticated to ACR successfully"
+
+  versioning:
+    name: Generate Dynamic Version
+    runs-on: ubuntu-latest
+    needs: auth
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'noprod' }}
+    outputs:
+      IMAGE_TAG: ${{ steps.compute_version.outputs.IMAGE_TAG }}
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Compute next version from ACR tags
+        id: compute_version
+        run: |
+          tags=$(az acr repository show-tags \
+            --name "${{ env.ACR_NAME }}" \
+            --repository "${{ env.IMAGE_REPO }}" \
+            --orderby time_desc \
+            --output tsv 2>/dev/null || echo "")
+          if [ -z "$tags" ]; then
+            echo "No se encontraron tags. Usando versión base 0.0.0."
+            latestTag="0.0.0"
+          else
+            latestTag=$(echo "$tags" | head -n 1)
+            echo "Último tag encontrado: $latestTag"
+          fi
+          IFS='.' read -r major minor patch <<< "$latestTag"
+          if [[ -z "$major" || -z "$minor" || -z "$patch" ]]; then
+            echo "Tag inválido ($latestTag). Reseteando a 0.0.0."
+            major=0; minor=0; patch=0
+          fi
+          BRANCH="${{ github.ref }}"
+          echo "Rama actual: $BRANCH"
+          if [ "$BRANCH" = "refs/heads/main" ]; then
+            newVersion="$((major + 1)).0.0"
+            echo "Rama main → bump major"
+          elif [ "$BRANCH" = "refs/heads/qa" ] || [ "$BRANCH" = "refs/heads/develop" ]; then
+            newVersion="$major.$((minor + 1)).0"
+            echo "Rama qa/develop → bump minor"
+          elif [[ "$BRANCH" == refs/heads/bugfix/* ]] || [[ "$BRANCH" == refs/heads/hotfix/* ]]; then
+            newVersion="$major.$minor.$((patch + 1))"
+            echo "Rama bugfix/hotfix → bump patch"
+          else
+            newVersion="$major.$minor.$((patch + 1))"
+            echo "Rama feature u otra → bump patch (default)"
+          fi
+          echo "Nueva versión: $newVersion"
+          echo "IMAGE_TAG=$newVersion" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: versioning
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'noprod' }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: ACR login
+        run: az acr login --name "${{ env.ACR_NAME }}"
+
+      - name: Docker build & push
+        run: |
+          IMAGE_TAG="${{ needs.versioning.outputs.IMAGE_TAG }}"
+          echo "Construyendo imagen con tag: $IMAGE_TAG"
+          docker build -t "${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:$IMAGE_TAG" ./rutago-backend
+          docker push "${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:$IMAGE_TAG"
+
+  deploy:
+    name: Deploy to Container App
+    runs-on: ubuntu-latest
+    needs: [versioning, build]
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'noprod' }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update Container App image
+        run: |
+          IMAGE_TAG="${{ needs.versioning.outputs.IMAGE_TAG }}"
+          echo "Desplegando imagen con tag: $IMAGE_TAG"
+          az extension add --name containerapp --upgrade
+          az containerapp update \
+            --name "${{ env.CONTAINERAPP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --image "${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:$IMAGE_TAG"
+
+      - name: Verify deployment
+        run: |
+          echo "Esperando que la revisión esté activa..."
+          sleep 15
+          STATUS=$(az containerapp revision list \
+            --name "${{ env.CONTAINERAPP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "[0].properties.runningState" -o tsv)
+          echo "Estado: $STATUS"
+          if [ "$STATUS" != "Running" ]; then
+            echo "ERROR: La revisión no está corriendo"
+            exit 1
+          fi
