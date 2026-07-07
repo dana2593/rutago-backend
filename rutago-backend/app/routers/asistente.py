@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from openai import OpenAI
 import json
 from datetime import date, timedelta
@@ -64,7 +64,7 @@ async def chat_asistente(body: ChatMessage, current_user: dict = Depends(get_cur
             params=data.get("params"),
         )
 
-    except Exception as e:
+    except Exception:
         # Si falla OpenAI, usar fallback
         return _fallback_reply(body.mensaje)
 
@@ -132,7 +132,7 @@ def _fallback_reply(mensaje: str) -> ChatResponse:
         )
 
     return ChatResponse(
-        respuesta=f"No encontré un destino específico en tu mensaje. ¿Puedes decirme a dónde quieres viajar? Por ejemplo: *quiero ir a Cuenca este viernes*",
+        respuesta="No encontré un destino específico en tu mensaje. ¿Puedes decirme a dónde quieres viajar? Por ejemplo: *quiero ir a Cuenca este viernes*",
         accion=None,
         params=None,
     )

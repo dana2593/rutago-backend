@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from datetime import date
 from pydantic import BaseModel
-from typing import Optional
 
 from app.schemas.schemas import ViajeOut, VehiculoCreate, VehiculoOut
 from app.core.security import get_current_user

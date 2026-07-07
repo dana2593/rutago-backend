@@ -67,7 +67,7 @@ async def crear_reserva(body: ReservaCreate, current_user: dict = Depends(get_cu
     # 4) Descontar asientos con locking optimista vía función SQL
     try:
         sb.rpc("reservar_asientos", {"p_viaje_id": body.viaje_id, "p_pasajeros": body.pasajeros}).execute()
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No hay suficientes asientos disponibles",

@@ -1,8 +1,7 @@
 from __future__ import annotations
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, Literal
-from datetime import date, time
-from uuid import UUID
+from datetime import date
 
 
 # ─────────────────────────────────────────────────────────────
