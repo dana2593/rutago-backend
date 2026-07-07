@@ -1,0 +1,50 @@
+# ── Entorno / secretos ───────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+
+# ── Testing / cobertura ──────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node (si el repo incluye frontend o tooling JS) ──────────
+node_modules/
+npm-debug.log*
+package-lock.json.bak
+
+# ── Docker ───────────────────────────────────────────────────
+*.pid
+
+# ── Editor / SO ──────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Otros ────────────────────────────────────────────────────
+*.bak
+*.tmp

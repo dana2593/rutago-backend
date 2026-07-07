@@ -1,0 +1,40 @@
+# Secretos y entorno local — NUNCA deben entrar a la imagen
+.env
+.env.*
+!.env.example
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Cache de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Git y CI
+.git/
+.gitignore
+.github/
+
+# Node (por si el repo raíz trae node_modules del frontend/monorepo)
+node_modules/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+
+# Docs y varios que no hacen falta en runtime
+README.md
+supabase_schema.sql
+*.md
+
+# Docker mismo
+Dockerfile
+docker-compose*.yml
+.dockerignore
