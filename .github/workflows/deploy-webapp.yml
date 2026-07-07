@@ -1,0 +1,88 @@
+name: Deploy Frontend to Azure Web App
+
+on:
+  push:
+    branches:
+      - feature/**
+      - develop
+      - main
+      - qa
+      - DEV/**
+    paths:
+      - "RutaGo_conectado.html"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Inyectar URL del backend en el HTML
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          # Copia y renombra a index.html para que el servidor lo sirva en "/"
+          cp RutaGo_conectado.html site/index.html
+          # Reemplaza la URL hardcodeada por la del ambiente correspondiente
+          sed -i "s#const API = '[^']*';#const API = '${{ vars.VITE_API_BASE_URL }}';#" site/index.html
+          echo "Línea reemplazada:"
+          grep "const API" site/index.html
+
+      - name: 📊 Mostrar contexto de build
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📍 Rama: ${{ github.ref_name }}"
+          echo "🏷️  Environment: ${{ vars.ENVIRONMENT }}"
+          echo "📱 App Name: ${{ vars.WEBAPP_NAME }}"
+          echo "🔗 API URL: ${{ vars.VITE_API_BASE_URL }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Prepare runtime package (includes serve)
+        run: |
+          set -euo pipefail
+          cat > site/package.json <<'EOF'
+          {
+            "name": "rutago-front",
+            "private": true,
+            "dependencies": {
+              "serve": "^14.0.1"
+            },
+            "scripts": {
+              "start": "node ./node_modules/serve/build/main.js -s . --listen 8080"
+            }
+          }
+          EOF
+          cd site
+          npm install --omit=dev --production
+          echo "Site ready:"
+          ls -la
+
+      - name: Create deployment package
+        run: |
+          cd site
+          zip -r ../deploy.zip .
+          cd ..
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          ls -lh deploy.zip
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@122b7ec46017e53a3f71e3a027d67550a1641f5e
+        with:
+          app-name: ${{ vars.WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: deploy.zip
+
+      - name: ✅ Deployment Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Deploy completado en ${{ job.environment.name }}"
+          echo "📱 App: ${{ vars.WEBAPP_NAME }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
