@@ -132,7 +132,7 @@ async def me(current_user: dict = Depends(get_current_user)):
         sb.table("usuarios")
         .select("*")
         .eq("id", current_user["sub"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:

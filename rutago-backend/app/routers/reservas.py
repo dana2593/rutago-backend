@@ -45,7 +45,7 @@ async def crear_reserva(body: ReservaCreate, current_user: dict = Depends(get_cu
         sb.table("viajes")
         .select("*, usuarios(nombre_completo)")
         .eq("id", body.viaje_id)
-        .single()
+        .maybe_single()
         .execute()
     )
     if not viaje_result.data:
