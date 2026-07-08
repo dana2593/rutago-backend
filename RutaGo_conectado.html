@@ -897,7 +897,7 @@ body{font-family:'Inter',sans-serif;background:#D8D4CE;display:flex;align-items:
 <div class="screen" id="s-conductor-home">
   <div class="home-hdr" style="background:var(--green);">
     <div class="home-greet">Modo Conductor</div>
-    <div class="home-name" id="conductor-name">Dana Boada</div>
+    <div class="home-name" id="conductor-name">Conductor</div>
     <div style="display:flex;gap:10px;margin-top:12px;">
       <button onclick="navTo('s-publicar-viaje')" style="flex:1;background:white;color:var(--green);border:none;border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;">+ Publicar viaje</button>
       <button onclick="cargarViajesPublicados();navTo('s-mis-publicados')" style="flex:1;background:rgba(255,255,255,0.2);color:white;border:2px solid white;border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;">Mis viajes</button>
@@ -1103,6 +1103,7 @@ function setUserUI(user) {
   state.user = user;
   const nombre = user.nombre_completo || user.name || '';
   document.getElementById('home-name').textContent = nombre;
+  document.getElementById('conductor-name').textContent = nombre;
   document.getElementById('prof-nm').textContent = nombre;
   document.getElementById('prof-em').textContent = user.email || '';
   // Iniciales avatar
