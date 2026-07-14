@@ -2,8 +2,11 @@ import psycopg2
 import os
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pydantic import BaseModel
+
+EC_TZ = ZoneInfo("America/Guayaquil")  # Ecuador no tiene DST
 
 from app.schemas.schemas import ViajeOut, VehiculoCreate, VehiculoOut
 from app.core.security import get_current_user
@@ -68,26 +71,57 @@ VIAJES_QUERY = """
 @router.get("", response_model=list[ViajeOut])
 async def buscar_viajes(
     destino: str = Query(...),
-    fecha: date = Query(...),
+    fecha: date | None = Query(None, description="Si no se envía, trae próximos viajes"),
     pasajeros: int = Query(1, ge=1, le=4),
-    orden: str = Query("precio"),
+    orden: str = Query("fecha", pattern="^(fecha|precio)$"),
+    limit: int = Query(20, ge=1, le=50),
     _user: dict = Depends(get_current_user),
 ):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        VIAJES_QUERY + """
-        WHERE v.destino ILIKE %s
-          AND v.fecha_salida = %s
-          AND v.asientos_disponibles >= %s
-          AND v.estado = 'activo'
-        ORDER BY v.precio_por_persona ASC
-        """,
-        (f"%{destino}%", str(fecha), pasajeros)
+    now_ec = datetime.now(EC_TZ)
+    hoy = now_ec.date()
+    hora_actual = now_ec.time().replace(microsecond=0)
+
+    order_clause = (
+        "ORDER BY v.precio_por_persona ASC"
+        if orden == "precio"
+        else "ORDER BY v.fecha_salida ASC, v.hora_salida ASC"
     )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if fecha:
+            # Búsqueda con fecha específica
+            cur.execute(
+                VIAJES_QUERY + f"""
+                WHERE v.destino ILIKE %s
+                  AND v.fecha_salida = %s
+                  AND v.asientos_disponibles >= %s
+                  AND v.estado = 'activo'
+                  AND (v.fecha_salida > %s OR v.hora_salida > %s)
+                {order_clause}
+                LIMIT %s
+                """,
+                (f"%{destino}%", str(fecha), pasajeros, hoy, hora_actual, limit)
+            )
+        else:
+            # Búsqueda solo por ciudad: próximos viajes, sin fechas ni horas pasadas
+            cur.execute(
+                VIAJES_QUERY + f"""
+                WHERE v.destino ILIKE %s
+                  AND v.asientos_disponibles >= %s
+                  AND v.estado = 'activo'
+                  AND (v.fecha_salida > %s OR (v.fecha_salida = %s AND v.hora_salida > %s))
+                {order_clause}
+                LIMIT %s
+                """,
+                (f"%{destino}%", pasajeros, hoy, hoy, hora_actual, limit)
+            )
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
     return [_map_row(r) for r in rows]
 
 
