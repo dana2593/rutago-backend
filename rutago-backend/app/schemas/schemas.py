@@ -44,6 +44,7 @@ class UserOut(BaseModel):
     viajes_completados: int = 0
     valoracion_promedio: float = 0.0
     es_conductor: bool = False
+    estado_verificacion: str = "sin_verificar"  # sin_verificar | pendiente | aprobado | rechazado
 
 
 class UserUpdateRequest(BaseModel):
@@ -118,6 +119,17 @@ class ReservaCreate(BaseModel):
     viaje_id: str
     pasajeros: int
     metodo_pago: Literal["pichincha", "produbanco", "guayaquil", "efectivo"]
+    es_para_otro: bool = False
+    pasajero_nombre: Optional[str] = None
+    pasajero_cedula: Optional[str] = None
+    pasajero_telefono: Optional[str] = None
+
+    @field_validator("pasajero_cedula")
+    @classmethod
+    def cedula_solo_numeros(cls, v: Optional[str]) -> Optional[str]:
+        if v and not v.isdigit():
+            raise ValueError("La cédula debe contener solo números")
+        return v
 
 
 class ReservaOut(BaseModel):
@@ -133,6 +145,9 @@ class ReservaOut(BaseModel):
     ruta: str
     fecha_hora: str
     punto_encuentro: str
+    es_para_otro: bool = False
+    pasajero_nombre: Optional[str] = None
+    pasajero_telefono: Optional[str] = None
 
 
 class ReservaCancelRequest(BaseModel):

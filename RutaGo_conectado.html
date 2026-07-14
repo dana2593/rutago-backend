@@ -79,6 +79,13 @@ body{font-family:'Inter',sans-serif;background:#D8D4CE;display:flex;align-items:
   background:var(--green);border-color:var(--green);color:#fff;
 }
 #toast{position:absolute;bottom:84px;left:16px;right:16px;padding:13px 16px;border-radius:12px;font-size:13px;font-weight:600;text-align:center;display:none;z-index:200;box-shadow:0 8px 24px rgba(0,0,0,0.18);transition:opacity .3s;color:#ffffff;}
+/* ═══════════ MODAL: CONFLICTO DE HORARIO ═══════════ */
+.rg-modal-overlay{position:absolute;inset:0;background:rgba(0,0,0,.5);display:none;align-items:flex-end;justify-content:center;z-index:300;}
+.rg-modal-card{width:100%;background:var(--white);border-radius:20px 20px 0 0;padding:22px 20px calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px;max-height:80%;overflow-y:auto;}
+.rg-modal-title{font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.3px;}
+.rg-modal-sub{font-size:13px;color:var(--sub);line-height:1.5;}
+.rg-modal-row{display:flex;gap:10px;margin-top:6px;}
+.rg-modal-row .btn-p, .rg-modal-row .btn-g{margin:0;}
 
 /* ════════════════ SPLASH ════════════════ */
 #s-splash{align-items:center;justify-content:center;gap:10px;background:var(--red);}
@@ -338,6 +345,11 @@ body{font-family:'Inter',sans-serif;background:#D8D4CE;display:flex;align-items:
     <div><div class="flabel">Teléfono</div><input class="finput" id="reg-tel" type="tel" placeholder="+593 99 000 0000"></div>
     <div><div class="flabel">Contraseña</div><input class="finput" id="reg-pass" type="password" placeholder="Mínimo 8 caracteres"></div>
     <div><div class="flabel">Confirmar contraseña</div><input class="finput" id="reg-pass2" type="password" placeholder="Repite tu contraseña"></div>
+    <div>
+      <div class="flabel">Carnet estudiantil (foto o PDF)</div>
+      <input class="finput" id="reg-carnet" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" style="padding:10px 14px;">
+      <div style="font-size:11px;color:var(--sub);margin-top:4px;">Lo usamos solo para verificar que eres estudiante. Revisión en 24-48h.</div>
+    </div>
     <button class="btn-p" onclick="doRegister()">Crear cuenta</button>
   </div>
 </div>
@@ -645,6 +657,34 @@ body{font-family:'Inter',sans-serif;background:#D8D4CE;display:flex;align-items:
 
 <!-- TOAST -->
 <div id="toast"></div>
+
+<!-- MODAL: ¿ES PARA ALGUIEN MÁS? -->
+<div class="rg-modal-overlay" id="rg-conflict-modal">
+  <div class="rg-modal-card">
+
+    <div id="rg-conflict-question" style="display:flex;flex-direction:column;gap:12px;">
+      <div class="rg-modal-title">¿Este viaje es para alguien más?</div>
+      <div class="rg-modal-sub" id="rg-conflict-info">Ya tienes un viaje próximo que se cruza con este horario.</div>
+      <div class="rg-modal-row">
+        <button class="btn-g" onclick="conflictoRespuestaNo()">No, es para mí</button>
+        <button class="btn-p" onclick="conflictoRespuestaSi()">Sí, es para alguien más</button>
+      </div>
+    </div>
+
+    <div id="rg-conflict-form" style="display:none;flex-direction:column;gap:12px;">
+      <div class="rg-modal-title">Datos de quien viaja</div>
+      <div class="rg-modal-sub">Necesitamos estos datos porque tú no serás quien viaje esta vez.</div>
+      <div><div class="flabel">Nombre completo</div><input class="finput" id="rg-guest-nombre" placeholder="Ej. María Pérez"></div>
+      <div><div class="flabel">Cédula</div><input class="finput" id="rg-guest-cedula" inputmode="numeric" placeholder="Ej. 1712345678"></div>
+      <div><div class="flabel">Teléfono</div><input class="finput" id="rg-guest-telefono" type="tel" placeholder="+593 99 000 0000"></div>
+      <div class="rg-modal-row">
+        <button class="btn-g" onclick="cerrarModalConflicto()">Cancelar</button>
+        <button class="btn-p" onclick="confirmarReservaParaOtro()">Confirmar reserva</button>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 
 <!-- ══ EDITAR PERFIL ══ -->
@@ -1043,7 +1083,26 @@ async function api(method, path, body) {
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || 'Error en la solicitud');
+  if (!res.ok) {
+    const detail = data.detail;
+    const msg = typeof detail === 'string' ? detail : (detail?.mensaje || 'Error en la solicitud');
+    const err = new Error(msg);
+    err.detail = detail; // puede ser un objeto { code, mensaje, viaje_existente }
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+// Subida de archivos (multipart) - separado de api() porque no usa JSON
+async function apiUpload(path, file, fieldName) {
+  const form = new FormData();
+  form.append(fieldName, file);
+  const opts = { method: 'POST', body: form, headers: {} };
+  if (state.token) opts.headers['Authorization'] = 'Bearer ' + state.token;
+  const res = await fetch(API + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || 'Error al subir el archivo');
   return data;
 }
 
@@ -1239,12 +1298,9 @@ function openDetail(id){
   go('s-detail');
 }
 
-function selPay(el){document.querySelectorAll('.pm-opt').forEach(o=>o.classList.remove('sel'));el.classList.add('sel');}
+function selPay(el){document.querySelectorAll('.pm-opt.sel').forEach(o=>o.classList.remove('sel'));el.classList.add('sel');}
 
-async function doConfirm(){
-  const d=state.selDriver;
-  if(!d)return;
-  // Obtener método de pago seleccionado
+function _metodoPagoActual(){
   const payEl = document.querySelector('.pm-opt.sel .pm-nm');
   const payMap = {
     'Banco de Pichincha':'pichincha',
@@ -1252,16 +1308,36 @@ async function doConfirm(){
     'Banco de Guayaquil':'guayaquil',
     'Efectivo':'efectivo'
   };
-  const metodoPago = payMap[payEl?.textContent] || 'efectivo';
+  return payMap[payEl?.textContent] || 'efectivo';
+}
 
+async function doConfirm(){
+  const d=state.selDriver;
+  if(!d)return;
+  toast('Verificando disponibilidad...','var(--blue)');
+  try {
+    const check = await api('GET', `/reservas/verificar-conflicto?viaje_id=${encodeURIComponent(d.id)}`);
+    if (check.conflicto) {
+      abrirModalConflicto(check.viaje_existente);
+      return;
+    }
+    await crearReservaFinal({});
+  } catch(err){
+    toast('❌ '+err.message,'#92400E');
+  }
+}
+
+async function crearReservaFinal(extra){
+  const d=state.selDriver;
+  if(!d)return;
   toast('Procesando reserva...','var(--blue)');
   try {
     const reserva = await api('POST','/reservas',{
       viaje_id: d.id,
       pasajeros: state.pax,
-      metodo_pago: metodoPago
+      metodo_pago: _metodoPagoActual(),
+      ...extra,
     });
-    // Mostrar confirmación
     document.getElementById('conf-nm').textContent=reserva.conductor_nombre;
     document.getElementById('conf-route').textContent=reserva.ruta;
     document.getElementById('conf-dt').textContent=reserva.fecha_hora;
@@ -1270,8 +1346,63 @@ async function doConfirm(){
     document.getElementById('conf-code').textContent=reserva.codigo_reserva;
     go('s-confirm');
   } catch(err) {
+    // Red de seguridad: si el backend igual detecta conflicto (ej. otra pestaña reservó
+    // justo antes), mostramos el mismo diálogo en vez de un error genérico.
+    if (err.detail?.code === 'CONFLICTO_HORARIO') {
+      abrirModalConflicto(err.detail.viaje_existente);
+      return;
+    }
     toast('❌ '+err.message,'#92400E');
   }
+}
+
+// ── MODAL: ¿Este viaje es para alguien más? ────────────────
+function abrirModalConflicto(viajeExistente){
+  const info = viajeExistente
+    ? `Ya tienes reservado un viaje a ${viajeExistente.destino} el ${viajeExistente.fecha_salida} a las ${viajeExistente.hora_salida}.`
+    : 'Ya tienes un viaje próximo que se cruza con este horario.';
+  document.getElementById('rg-conflict-info').textContent = info;
+  document.getElementById('rg-conflict-question').style.display='flex';
+  document.getElementById('rg-conflict-form').style.display='none';
+  document.getElementById('rg-conflict-modal').style.display='flex';
+}
+
+function cerrarModalConflicto(){
+  document.getElementById('rg-conflict-modal').style.display='none';
+  document.getElementById('rg-guest-nombre').value='';
+  document.getElementById('rg-guest-cedula').value='';
+  document.getElementById('rg-guest-telefono').value='';
+}
+
+function conflictoRespuestaNo(){
+  cerrarModalConflicto();
+  toast('⚠️ Ya tienes un viaje próximo, no puedes hacer otra reserva','#92400E');
+}
+
+function conflictoRespuestaSi(){
+  document.getElementById('rg-conflict-question').style.display='none';
+  document.getElementById('rg-conflict-form').style.display='flex';
+}
+
+async function confirmarReservaParaOtro(){
+  const nombre=document.getElementById('rg-guest-nombre').value.trim();
+  const cedula=document.getElementById('rg-guest-cedula').value.trim();
+  const telefono=document.getElementById('rg-guest-telefono').value.trim();
+  if(!nombre||!cedula||!telefono){
+    toast('⚠️ Completa nombre, cédula y teléfono','#92400E');
+    return;
+  }
+  if(!/^\d+$/.test(cedula)){
+    toast('⚠️ La cédula debe contener solo números','#92400E');
+    return;
+  }
+  cerrarModalConflicto();
+  await crearReservaFinal({
+    es_para_otro: true,
+    pasajero_nombre: nombre,
+    pasajero_cedula: cedula,
+    pasajero_telefono: telefono,
+  });
 }
 
 // ── TRIPS ──────────────────────────────────────────────
@@ -1398,16 +1529,27 @@ async function doRegister(){
   const tel=document.getElementById('reg-tel')?.value?.trim();
   const pass=document.getElementById('reg-pass')?.value;
   const pass2=document.getElementById('reg-pass2')?.value;
+  const carnetFile=document.getElementById('reg-carnet')?.files?.[0];
   if(!nombre||!email||!pass){toast('⚠️ Completa todos los campos','#92400E');return;}
   if(pass!==pass2){toast('⚠️ Las contraseñas no coinciden','#92400E');return;}
+  if(!carnetFile){toast('⚠️ Sube tu carnet estudiantil para continuar','#92400E');return;}
   toast('Creando cuenta...','var(--blue)');
   try {
     const data=await api('POST','/auth/register',{nombre_completo:nombre,email,telefono:tel||'',password:pass});
     state.token=data.access_token;
     localStorage.setItem('rg_token',data.access_token);
     setUserUI(data.user);
+
+    // Subir el carnet ya autenticado (la cuenta queda 'pendiente' hasta revisión manual)
+    try {
+      await apiUpload('/auth/verificar-estudiante', carnetFile, 'carnet');
+      toast('¡Cuenta creada! Carnet enviado para verificación 🎉','var(--green)');
+    } catch(upErr) {
+      // La cuenta ya se creó; solo avisamos que falló la subida del carnet
+      toast('Cuenta creada, pero falló la subida del carnet: '+upErr.message,'#92400E');
+    }
+
     go('s-home');
-    toast('¡Cuenta creada! Bienvenido/a 🎉','var(--green)');
   } catch(err){toast('❌ '+err.message,'#92400E');}
 }
 

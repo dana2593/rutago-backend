@@ -1,5 +1,7 @@
 import random
+import re
 import string
+from datetime import date, datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.schemas.schemas import ReservaCreate, ReservaOut, ReservaCancelRequest, CalificacionCreate
@@ -12,6 +14,70 @@ router = APIRouter(prefix="/reservas", tags=["Reservas"])
 def _generar_codigo() -> str:
     """Genera un código de reserva tipo RG-XXXXX."""
     return "RG-" + "".join(random.choices(string.digits, k=5))
+
+
+def _parse_hora(valor) -> time:
+    """Convierte 'HH:MM' / 'HH:MM:SS' (string) o un objeto time ya parseado a time."""
+    if isinstance(valor, time):
+        return valor
+    texto = str(valor)[:5]
+    return datetime.strptime(texto, "%H:%M").time()
+
+
+def _duracion_a_minutos(texto: str | None) -> int:
+    """
+    Convierte duraciones tipo '~8h', '~30min', '~2h30min' a minutos.
+    Si no logra parsear nada, asume 60 min como margen conservador.
+    """
+    if not texto:
+        return 60
+    horas = re.search(r"(\d+)\s*h", texto)
+    minutos = re.search(r"(\d+)\s*min", texto)
+    total = 0
+    if horas:
+        total += int(horas.group(1)) * 60
+    if minutos:
+        total += int(minutos.group(1))
+    return total or 60
+
+
+def _rango_viaje(viaje: dict) -> tuple[datetime, datetime]:
+    """Devuelve (inicio, fin) de un viaje como datetimes, usando su duración estimada."""
+    fecha = viaje["fecha_salida"]
+    fecha = fecha if isinstance(fecha, date) else date.fromisoformat(str(fecha))
+    inicio = datetime.combine(fecha, _parse_hora(viaje["hora_salida"]))
+    fin = inicio + timedelta(minutes=_duracion_a_minutos(viaje.get("duracion_estimada")))
+    return inicio, fin
+
+
+def _buscar_conflicto_horario(sb, pasajero_id: str, nuevo_viaje: dict) -> dict | None:
+    """
+    Revisa si el pasajero ya tiene una reserva confirmada A SU PROPIO NOMBRE
+    (es_para_otro=False) cuyo rango de horario se cruza con el del nuevo viaje.
+    Las reservas hechas "para otra persona" no cuentan, porque quien viaja
+    en ese caso no es el dueño de la cuenta.
+    Retorna el viaje en conflicto o None.
+    """
+    nuevo_inicio, nuevo_fin = _rango_viaje(nuevo_viaje)
+
+    result = (
+        sb.table("reservas")
+        .select("*, viajes(destino, fecha_salida, hora_salida, duracion_estimada)")
+        .eq("pasajero_id", pasajero_id)
+        .eq("estado", "confirmada")
+        .eq("es_para_otro", False)
+        .execute()
+    )
+
+    for row in result.data:
+        viaje = row.get("viajes")
+        if not viaje:
+            continue
+        inicio, fin = _rango_viaje(viaje)
+        # Se cruzan si un rango empieza antes de que el otro termine, en ambos sentidos
+        if inicio < nuevo_fin and nuevo_inicio < fin:
+            return viaje
+    return None
 
 
 def _map_reserva(row: dict, viaje: dict, conductor_nombre: str) -> ReservaOut:
@@ -28,7 +94,36 @@ def _map_reserva(row: dict, viaje: dict, conductor_nombre: str) -> ReservaOut:
         ruta=f"Quito - {viaje['destino']}",
         fecha_hora=f"{viaje['fecha_salida']} · {str(viaje['hora_salida'])[:5]}",
         punto_encuentro=viaje["punto_encuentro"],
+        es_para_otro=row.get("es_para_otro", False),
+        pasajero_nombre=row.get("pasajero_nombre"),
+        pasajero_telefono=row.get("pasajero_telefono"),
     )
+
+
+@router.get("/verificar-conflicto")
+async def verificar_conflicto(viaje_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Revisa si reservar `viaje_id` chocaría en horario con un viaje que el
+    usuario ya tiene confirmado a su propio nombre. El front usa esto
+    ANTES de confirmar, para decidir si pregunta '¿es para alguien más?'.
+    """
+    sb = get_supabase()
+    viaje_result = sb.table("viajes").select("*").eq("id", viaje_id).maybe_single().execute()
+    if not viaje_result.data:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+    conflicto = _buscar_conflicto_horario(sb, current_user["sub"], viaje_result.data)
+    if not conflicto:
+        return {"conflicto": False}
+
+    return {
+        "conflicto": True,
+        "viaje_existente": {
+            "destino": conflicto["destino"],
+            "fecha_salida": str(conflicto["fecha_salida"]),
+            "hora_salida": str(conflicto["hora_salida"])[:5],
+        },
+    }
 
 
 @router.post("", response_model=ReservaOut, status_code=status.HTTP_201_CREATED)
@@ -61,10 +156,35 @@ async def crear_reserva(body: ReservaCreate, current_user: dict = Depends(get_cu
             detail="No puedes reservar tu propio viaje",
         )
 
-    # 3) Calcular total
+    # 3) Si es para el propio usuario, verificar que no choque con otro viaje suyo.
+    #    Si es para otra persona, no aplica (quien viaja no es el dueño de la cuenta),
+    #    pero exigimos los datos de esa persona.
+    if body.es_para_otro:
+        if not (body.pasajero_nombre and body.pasajero_cedula and body.pasajero_telefono):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Debes ingresar nombre, cédula y teléfono de la persona que viajará",
+            )
+    else:
+        conflicto = _buscar_conflicto_horario(sb, current_user["sub"], viaje)
+        if conflicto:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "CONFLICTO_HORARIO",
+                    "mensaje": "Ya tienes un viaje próximo, no puedes hacer otra reserva",
+                    "viaje_existente": {
+                        "destino": conflicto["destino"],
+                        "fecha_salida": str(conflicto["fecha_salida"]),
+                        "hora_salida": str(conflicto["hora_salida"])[:5],
+                    },
+                },
+            )
+
+    # 4) Calcular total
     total = float(viaje["precio_por_persona"]) * body.pasajeros
 
-    # 4) Descontar asientos con locking optimista vía función SQL
+    # 5) Descontar asientos con locking optimista vía función SQL
     try:
         sb.rpc("reservar_asientos", {"p_viaje_id": body.viaje_id, "p_pasajeros": body.pasajeros}).execute()
     except Exception as e:
@@ -74,7 +194,7 @@ async def crear_reserva(body: ReservaCreate, current_user: dict = Depends(get_cu
             detail="No hay suficientes asientos disponibles",
         )
 
-    # 5) Insertar reserva
+    # 6) Insertar reserva
     codigo = _generar_codigo()
     reserva_result = (
         sb.table("reservas")
@@ -87,6 +207,10 @@ async def crear_reserva(body: ReservaCreate, current_user: dict = Depends(get_cu
                 "metodo_pago": body.metodo_pago,
                 "total": total,
                 "estado": "confirmada",
+                "es_para_otro": body.es_para_otro,
+                "pasajero_nombre": body.pasajero_nombre,
+                "pasajero_cedula": body.pasajero_cedula,
+                "pasajero_telefono": body.pasajero_telefono,
             }
         )
         .execute()
