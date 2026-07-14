@@ -6,14 +6,14 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 
-EC_TZ = ZoneInfo("America/Guayaquil")  # Ecuador no tiene DST
-
 from app.schemas.schemas import ViajeOut, VehiculoCreate, VehiculoOut
 from app.core.security import get_current_user
 from app.core.supabase import get_supabase
 
 load_dotenv()
 router = APIRouter(prefix="/viajes", tags=["Viajes"])
+
+EC_TZ = ZoneInfo("America/Guayaquil")  # Ecuador no tiene DST
 
 
 class ViajePublicarRequest(BaseModel):
