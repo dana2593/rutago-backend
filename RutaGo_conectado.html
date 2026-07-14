@@ -406,7 +406,7 @@ body{font-family:'Inter',sans-serif;background:#D8D4CE;display:flex;align-items:
         <div class="dest-chip" onclick="pickDest(this,'Ambato')">Ambato</div>
       </div>
     </div>
-    <div><div class="flabel">Fecha de salida</div><input class="finput" type="date" id="s-date"></div>
+    <div><div class="flabel">Fecha de salida (opcional)</div><input class="finput" type="date" id="s-date"><div style="font-size:11px;color:var(--sub);margin-top:4px;">Déjalo vacío para ver los próximos viajes disponibles</div></div>
     <div>
       <div class="flabel">Número de pasajeros</div>
       <div class="pax-row">
@@ -1141,7 +1141,7 @@ async function doSearch(){
   const d=document.getElementById('s-dest').value||'Guayas';
   state.dest=d; state.pax=pax;
   const dateEl=document.getElementById('s-date');
-  state.date=dateEl.value||new Date().toISOString().split('T')[0];
+  state.date=dateEl.value||''; // vacío = próximos viajes, sin filtrar por fecha
   go('s-results');
   await renderDrivers();
 }
@@ -1149,14 +1149,16 @@ async function doSearch(){
 // ── RESULTS ────────────────────────────────────────────
 async function renderDrivers(){
   const dest=state.dest||'Guayas';
-  const fecha=state.date||new Date().toISOString().split('T')[0];
+  const fecha=state.date||''; // '' = sin filtro de fecha (próximos viajes)
   document.getElementById('res-title').textContent='Quito - '+dest;
   document.getElementById('res-sub').textContent='Cargando viajes...';
   const list=document.getElementById('dlist');
   list.innerHTML='<div style="text-align:center;padding:40px;color:var(--sub)">⏳ Buscando conductores...</div>';
 
   try {
-    const viajes = await api('GET',`/viajes?destino=${encodeURIComponent(dest)}&fecha=${fecha}&pasajeros=${state.pax}`);
+    const params=new URLSearchParams({destino:dest,pasajeros:state.pax});
+    if(fecha) params.append('fecha',fecha);
+    const viajes = await api('GET',`/viajes?${params.toString()}`);
     drivers = viajes.map((v,i)=>({
       id: v.id,
       av: ['👨','👨‍🦱','👩','👴','👱‍♀️'][i%5],
@@ -1165,6 +1167,7 @@ async function renderDrivers(){
       car: v.vehiculo_descripcion,
       placa: v.vehiculo_placa,
       hora: v.hora_salida,
+      fecha: v.fecha_salida,
       dur: v.duracion_estimada,
       price: v.precio_por_persona,
       seats: v.asientos_disponibles,
@@ -1175,10 +1178,11 @@ async function renderDrivers(){
       badge: v.conductor_rango === 'Elite' ? 'Elite' : (v.conductor_rango === 'Frecuente' ? 'Frecuente' : ''),
     }));
 
-    document.getElementById('res-sub').textContent=`${drivers.length} viajes · ${fecha} · ${state.pax} pasajero(s)`;
+    const subInfo = fecha ? fecha : 'próximos viajes';
+    document.getElementById('res-sub').textContent=`${drivers.length} viajes · ${subInfo} · ${state.pax} pasajero(s)`;
 
     if (!drivers.length) {
-      list.innerHTML='<div style="text-align:center;padding:40px;color:var(--sub);font-size:14px;">No hay conductores disponibles para esta ruta y fecha</div>';
+      list.innerHTML='<div style="text-align:center;padding:40px;color:var(--sub);font-size:14px;">No hay conductores disponibles para esta ruta'+(fecha?' y fecha':'')+'</div>';
       return;
     }
 
@@ -1190,7 +1194,7 @@ async function renderDrivers(){
           <div><div class="dc-pr">$${d.price}</div><div class="dc-prsub">por persona</div></div>
         </div>
         <div class="dc-tags">
-          <div class="dc-tag">${d.hora}</div>
+          <div class="dc-tag">${d.fecha} · ${d.hora}</div>
           <div class="dc-tag">${d.dur}</div>
           <div class="dc-tag">${d.seats} cupos</div>
           <div class="dc-tag">${d.meet.split('·')[0].trim()}</div>
@@ -1410,9 +1414,10 @@ async function doRegister(){
 // ── INIT ───────────────────────────────────────────────
 const today=new Date();
 const ymd=today.toISOString().split('T')[0];
-document.getElementById('s-date').value=ymd;
-document.getElementById('hf-date').textContent=today.toLocaleDateString('es-EC',{day:'numeric',month:'short'});
-state.date=ymd;
+// Ya no precargamos s-date con la fecha de hoy: dejarlo vacío permite
+// buscar "próximos viajes" por ciudad sin filtrar por fecha.
+document.getElementById('hf-date').textContent='Cualquier fecha';
+state.date='';
 
 // Si hay token guardado, ir directo al home
 setTimeout(async ()=>{
